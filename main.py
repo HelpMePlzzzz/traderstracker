@@ -2,9 +2,11 @@ import requests
 import json
 import os
 from datetime import datetime
-from google import genai
 
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+# Gemini 최신 패키지 사용
+from google.genai import Client
+
+client = Client(api_key=os.environ["GEMINI_API_KEY"])
 
 def send_telegram(text):
     token = os.environ["TELEGRAM_TOKEN"]
@@ -18,9 +20,8 @@ def get_naver_lowest(query):
     
     # 상품명 정리 - 최대한 일반적으로 (특정 상품 하드코딩 완전 제거)
     clean_query = query.replace("트레이더스", "").replace("(각)", "").replace("세트", "").strip()
-    clean_query = clean_query[:60]   # 검색어 길이 제한
+    clean_query = clean_query[:60]
     
-    # 과도한 보정 없이 그대로 검색 (다음 주 전단에 맞게 유연하게)
     url = "https://openapi.naver.com/v1/search/shop.json"
     params = {"query": clean_query, "display": 1, "sort": "asc"}
     headers = {
@@ -41,7 +42,6 @@ def get_naver_lowest(query):
     return None
 
 def get_danawa_link(product_name):
-    """다나와 가격 추이 링크 생성"""
     clean_name = product_name.replace(" ", "+").replace("(", "").replace(")", "")
     return f"https://prod.danawa.com/list/?go=productSearch&searchKeyword={clean_name}"
 
@@ -50,16 +50,13 @@ print("🚀 트레이더스 전단 분석 시작...")
 
 send_telegram("📸 트레이더스 오늘 전단 분석 시작합니다!\n10% 이상 저렴한 작은 상품 + 다나와 링크 함께 보내드려요.")
 
-# 전단 페이지 가져오기
 flyer_url = "https://eapp.emart.com/tradersclub/flyerImgView.do"
 page_response = requests.get(flyer_url, headers={"User-Agent": "Mozilla/5.0"})
 
-# 매주 바뀌는 전단에 강건한 프롬프트
 prompt = """
 이 페이지는 이마트 트레이더스 이번 주 전단 페이지입니다.
 페이지 전체를 분석해서 할인 상품들, 특히 아래쪽 작은 상품(생활용품, 세제, 가전, 의류, 침구 등)을 중점으로 추출해주세요.
 상품 이미지에서 상품 상단에 적힌 검정숫자가 원래가격이고 빨간 숫자가 할인해주는 금액입니다.
-
 각 상품마다 아래 JSON 형식으로만 정확히 출력해. 다른 설명은 절대 넣지 마세요:
 
 [
