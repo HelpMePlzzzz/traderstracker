@@ -3,9 +3,7 @@ import json
 import os
 from datetime import datetime
 from google import genai
-import danawa as dw   # 다나와 비공식 라이브러리
 
-# Gemini 설정
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 def send_telegram(text):
@@ -38,28 +36,15 @@ def get_naver_lowest(query):
         pass
     return None
 
-def get_danawa_lowest_3months(product_name):
-    """다나와에서 3개월 내 최저가 가져오기"""
-    try:
-        # 상품 코드 검색
-        codes = dw.get_product_codes(product_name)
-        if not codes:
-            return None
-        product_code = codes[0]  # 첫 번째 상품 코드 사용
+def get_danawa_link(product_name):
+    """다나와 가격 추이 링크 생성"""
+    clean_name = product_name.replace(" ", "+")
+    return f"https://prod.danawa.com/list/?go=productSearch&searchKeyword={clean_name}"
 
-        # 3개월 가격 이력 가져오기
-        history = dw.get_price_variance(product_code, by_month=3)
-        if history and 'min_price' in history:
-            return history['min_price']
-        return None
-    except Exception as e:
-        print(f"다나와 가격 이력 조회 실패 ({product_name}): {e}")
-        return None
+# ================== 메인 ==================
+print("🚀 트레이더스 전단 분석 시작...")
 
-# ================== 메인 실행 ==================
-print("🚀 트레이더스 전단 분석 시작 (역대 최저가 포함)...")
-
-send_telegram("📸 트레이더스 오늘 전단 분석 시작합니다!\n10% 이상 저렴한 상품 + 3개월 역대 최저가 함께 보내드려요.")
+send_telegram("📸 트레이더스 오늘 전단 분석 시작합니다!\n10% 이상 저렴한 상품 + 다나와 가격 추이 링크 함께 보내드려요.")
 
 flyer_url = "https://eapp.emart.com/tradersclub/flyerImgView.do"
 page_response = requests.get(flyer_url, headers={"User-Agent": "Mozilla/5.0"})
@@ -87,15 +72,13 @@ except Exception as e:
     print("JSON 파싱 실패:", e)
     products = []
 
-# ================== 비교 로직 ==================
 if not products:
     send_telegram("상품 추출 실패")
 else:
-    message = f"🔥 <b>트레이더스 {datetime.now().strftime('%m월 %d일')} 작은 상품 승리 목록 (10% 이상 + 역대 최저가)</b>\n\n"
+    message = f"🔥 <b>트레이더스 {datetime.now().strftime('%m월 %d일')} 작은 상품 승리 목록 (10% 이상)</b>\n\n"
     
     good_count = 0
     seen = set()
-    results = []
 
     for p in products:
         name = str(p.get("name", "")).strip()
@@ -109,23 +92,17 @@ else:
         if sale_price <= 1000: continue
 
         naver_price = get_naver_lowest(name)
-        danawa_lowest = get_danawa_lowest_3months(name)
+        danawa_link = get_danawa_link(name)
 
         if naver_price and sale_price < naver_price * 0.90:
             diff = naver_price - sale_price
             percent = round((diff / naver_price) * 100)
-            results.append((name, sale_price, naver_price, diff, percent, original, discount, danawa_lowest))
+
+            message += f"🏆 <b>{name}</b>\n"
+            message += f"트레이더스: <b>{sale_p:,}원</b> (원가 {original:,}원 - {discount:,}원 할인)\n"
+            message += f"네이버 현재: {naver_price:,}원 (▼{diff:,}원, {percent}% 저렴)\n"
+            message += f"📊 다나와 가격 추이: {danawa_link}\n\n"
             good_count += 1
-
-    results.sort(key=lambda x: x[3], reverse=True)
-
-    for name, sale_p, naver_p, diff, percent, orig, disc, danawa_min in results:
-        message += f"🏆 <b>{name}</b>\n"
-        message += f"트레이더스: <b>{sale_p:,}원</b> (원가 {orig:,}원 - {disc:,}원 할인)\n"
-        message += f"네이버 현재: {naver_p:,}원 (▼{diff:,}원, {percent}% 저렴)\n"
-        if danawa_min:
-            message += f"📉 다나와 3개월 역대 최저: <b>{danawa_min:,}원</b>\n"
-        message += "\n"
 
     if good_count == 0:
         message += "이번 주는 10% 이상 저렴한 작은 상품이 없네요."
