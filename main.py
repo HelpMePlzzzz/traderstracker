@@ -15,59 +15,64 @@ def send_telegram(text):
 def get_naver_lowest(query):
     if not query or len(query) < 3:
         return None
-    clean_query = query.replace("트레이더스", "").replace("(각)", "").replace("세트", "").strip()[:40]
-    if "비바로" in clean_query and "큐브" in clean_query:
-        clean_query = "비바로 큐브 실내자전거"
-    elif "글라스락" in clean_query:
-        clean_query = "글라스락 더클린 밀폐용기"
-
+    
+    # 상품명 정리 - 최대한 일반적으로 (특정 상품 하드코딩 완전 제거)
+    clean_query = query.replace("트레이더스", "").replace("(각)", "").replace("세트", "").strip()
+    clean_query = clean_query[:60]   # 검색어 길이 제한
+    
+    # 과도한 보정 없이 그대로 검색 (다음 주 전단에 맞게 유연하게)
     url = "https://openapi.naver.com/v1/search/shop.json"
     params = {"query": clean_query, "display": 1, "sort": "asc"}
     headers = {
         "X-Naver-Client-Id": os.environ["NAVER_CLIENT_ID"],
         "X-Naver-Client-Secret": os.environ["NAVER_CLIENT_SECRET"]
     }
+    
     try:
         res = requests.get(url, params=params, headers=headers, timeout=10)
         items = res.json().get("items", [])
         if items:
-            return int(items[0]["lprice"])
-    except:
-        pass
+            price = int(items[0]["lprice"])
+            print(f"검색어: {clean_query} → 네이버 최저가: {price:,}원")
+            return price
+    except Exception as e:
+        print(f"네이버 검색 실패 ({clean_query}): {e}")
+    
     return None
 
 def get_danawa_link(product_name):
+    """다나와 가격 추이 링크 생성"""
     clean_name = product_name.replace(" ", "+").replace("(", "").replace(")", "")
     return f"https://prod.danawa.com/list/?go=productSearch&searchKeyword={clean_name}"
 
 # ================== 메인 실행 ==================
 print("🚀 트레이더스 전단 분석 시작...")
 
-send_telegram("📸 트레이더스 이번 주 전단 분석 시작합니다!\n10% 이상 저렴한 작은 상품 + 다나와 링크 함께 보내드려요.")
+send_telegram("📸 트레이더스 오늘 전단 분석 시작합니다!\n10% 이상 저렴한 작은 상품 + 다나와 링크 함께 보내드려요.")
 
+# 전단 페이지 가져오기
 flyer_url = "https://eapp.emart.com/tradersclub/flyerImgView.do"
 page_response = requests.get(flyer_url, headers={"User-Agent": "Mozilla/5.0"})
 
-# 매주 바뀌는 전단에 더 강건한 프롬프트
+# 매주 바뀌는 전단에 강건한 프롬프트
 prompt = """
-당신은 이마트 트레이더스 전단 전문 분석가입니다.
-이 페이지는 이번 주 트레이더스 전단 페이지입니다.
+이 페이지는 이마트 트레이더스 이번 주 전단 페이지입니다.
+페이지 전체를 분석해서 할인 상품들, 특히 아래쪽 작은 상품(생활용품, 세제, 가전, 의류, 침구 등)을 중점으로 추출해주세요.
+상품 이미지에서 상품 상단에 적힌 검정숫자가 원래가격이고 빨간 숫자가 할인해주는 금액입니다.
 
-페이지에 있는 **모든 할인 상품**, 특히 **아래쪽에 있는 작은 상품들(생활용품, 세제, 가전, 의류, 침구 등)** 을 중점으로 분석해주세요.
-
-각 상품마다 아래 JSON 형식으로 **정확하게** 출력해. 다른 설명은 절대 넣지 마세요:
+각 상품마다 아래 JSON 형식으로만 정확히 출력해. 다른 설명은 절대 넣지 마세요:
 
 [
   {
     "name": "상품의 정확하고 자연스러운 전체 이름",
     "original_price": 정상가_숫자,
     "discount": 할인금액_숫자,
-    "sale_price": 실제_판매가_숫자
+    "sale_price": 실제판매가_숫자
   }
 ]
 
 실제 판매가는 original_price - discount로 계산해서 넣어주세요.
-가능한 한 많은 상품을 정확하게 추출해주세요.
+가능한 한 많은 상품을 추출해주세요.
 """
 
 response = client.models.generate_content(
