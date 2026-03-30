@@ -16,7 +16,6 @@ def send_telegram(text):
 def get_naver_lowest(query):
     if not query or len(query) < 3:
         return None
-    
     clean_query = query.replace("트레이더스", "").replace("(각)", "").replace("세트", "").strip()
     clean_query = clean_query[:60]
     
@@ -26,7 +25,6 @@ def get_naver_lowest(query):
         "X-Naver-Client-Id": os.environ["NAVER_CLIENT_ID"],
         "X-Naver-Client-Secret": os.environ["NAVER_CLIENT_SECRET"]
     }
-    
     try:
         res = requests.get(url, params=params, headers=headers, timeout=10)
         items = res.json().get("items", [])
@@ -36,7 +34,6 @@ def get_naver_lowest(query):
             return price
     except Exception as e:
         print(f"네이버 검색 실패 ({clean_query}): {e}")
-    
     return None
 
 def get_danawa_link(product_name):
@@ -44,21 +41,21 @@ def get_danawa_link(product_name):
     return f"https://prod.danawa.com/list/?go=productSearch&searchKeyword={clean_name}"
 
 # ================== 메인 실행 ==================
-print("🚀 트레이더스 전단 분석 시작 (5면 전체 분석)...")
+print("🚀 트레이더스 5면 전단 분석 시작...")
 
 send_telegram("📸 트레이더스 오늘 전단 분석 시작합니다!\n5면 전체를 분석해서 10% 이상 저렴한 작은 상품을 찾아드려요.")
 
 flyer_url = "https://eapp.emart.com/tradersclub/flyerImgView.do"
 page_response = requests.get(flyer_url, headers={"User-Agent": "Mozilla/5.0"})
 
-# 5면 전단을 고려한 강력한 프롬프트
+# 5면 슬라이드 전단을 고려한 강력 프롬프트
 prompt = """
 당신은 이마트 트레이더스 전단 전문 분석가입니다.
 
 이 페이지는 **총 5면**으로 구성된 트레이더스 이번 주 전단입니다. 
-사용자가 오른쪽/왼쪽으로 넘겨가며 보는 멀티페이지 전단입니다.
+사용자가 오른쪽/왼쪽 화살표로 넘겨가며 보는 슬라이드 형식입니다.
 
-전체 5면의 내용을 모두 분석해서 **할인 상품**, 특히 **작은 상품들**(생활용품, 세제, 가전, 의류, 침구, 식품 등)을 최대한 많이 정확하게 추출해주세요.
+**전체 5면의 내용을 모두 분석**해서 할인 상품들, 특히 작은 상품(생활용품, 세제, 가전, 의류, 침구, 식품 등)을 최대한 많이 정확하게 추출해주세요.
 
 각 상품마다 아래 JSON 형식으로만 출력해. 다른 설명은 절대 넣지 마세요:
 
@@ -72,7 +69,7 @@ prompt = """
 ]
 
 실제 판매가는 original_price - discount로 계산해서 넣어주세요.
-가능한 한 많은 상품을 5면 모두에서 추출해주세요.
+5면 전체에서 가능한 한 많은 상품을 추출해주세요.
 """
 
 response = model.generate_content([page_response.text, prompt])
