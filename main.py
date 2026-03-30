@@ -17,6 +17,7 @@ def get_naver_lowest(query):
     if not query or len(query) < 3:
         return None
     
+    # 상품명 정리 (일반적으로)
     clean_query = query.replace("트레이더스", "").replace("(각)", "").replace("세트", "").strip()
     clean_query = clean_query[:60]
     
@@ -39,26 +40,21 @@ def get_naver_lowest(query):
     
     return None
 
-def get_danawa_link(product_name):
-    clean_name = product_name.replace(" ", "+").replace("(", "").replace(")", "")
-    return f"https://prod.danawa.com/list/?go=productSearch&searchKeyword={clean_name}"
-
 # ================== 메인 실행 ==================
 print("🚀 트레이더스 전단 분석 시작...")
 
 send_telegram("📸 트레이더스 오늘 전단 분석 시작합니다!\n전체 페이지를 분석해서 10% 이상 저렴한 작은 상품을 찾아드려요.")
 
+# 전단 페이지 가져오기
 flyer_url = "https://eapp.emart.com/tradersclub/flyerImgView.do"
 page_response = requests.get(flyer_url, headers={"User-Agent": "Mozilla/5.0"})
 
-# 전체 페이지 분석을 강조한 프롬프트 (페이지 수 한정 제거)
+# 전체 페이지 분석을 강조한 프롬프트
 prompt = """
-당신은 이마트 트레이더스 전단 전문 분석가입니다.
+이 페이지는 이마트 트레이더스 이번 주 전단 페이지입니다.
+사용자가 오른쪽/왼쪽으로 넘겨가며 보는 여러 페이지로 구성된 전단입니다.
 
-이 페이지는 트레이더스 이번 주 전단 페이지입니다. 
-사용자가 오른쪽/왼쪽으로 넘겨가며 보는 **여러 페이지**로 구성된 전단입니다.
-
-**전체 페이지의 내용을 모두 분석**해서 할인 상품들, 특히 작은 상품(생활용품, 세제, 가전, 의류, 침구, 식품 등)을 최대한 많이 정확하게 추출해주세요.
+전체 페이지 내용을 모두 분석해서 할인 상품들, 특히 작은 상품(생활용품, 세제, 가전, 의류, 침구, 식품 등)을 최대한 많이 정확하게 추출해주세요.
 
 각 상품마다 아래 JSON 형식으로만 출력해. 다른 설명은 절대 넣지 마세요:
 
@@ -114,7 +110,6 @@ else:
             continue
 
         naver_price = get_naver_lowest(name)
-        danawa_link = get_danawa_link(name)
 
         if naver_price and sale_price < naver_price * 0.90:
             diff = naver_price - sale_price
@@ -122,8 +117,7 @@ else:
 
             message += f"🏆 <b>{name}</b>\n"
             message += f"트레이더스: <b>{sale_price:,}원</b> (원가 {original:,}원 - {discount:,}원 할인)\n"
-            message += f"네이버 현재 최저: {naver_price:,}원 (▼{diff:,}원, {percent}% 저렴)\n"
-            message += f"📊 다나와 가격 추이 보기 → {danawa_link}\n\n"
+            message += f"네이버 현재 최저: {naver_price:,}원 (▼{diff:,}원, {percent}% 저렴)\n\n"
             good_count += 1
 
     if good_count == 0:
