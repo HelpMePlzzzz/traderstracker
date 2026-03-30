@@ -1,7 +1,5 @@
 requests
 google-generativeai
 python-dotenv
-selenium
 beautifulsoup4
-webdriver-manager
 Pillow
