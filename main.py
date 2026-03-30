@@ -1,126 +1,135 @@
 import requests
 import json
 import os
-import re
 from datetime import datetime
-from PIL import Image
-from io import BytesIO
-from google import genai  # 최신 라이브러리 방식
+import google.generativeai as genai
 
-# 1. 환경 설정
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 def send_telegram(text):
     token = os.environ["TELEGRAM_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    try:
-        requests.post(url, data={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
-    except: pass
+    requests.post(url, data={"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
 
 def get_naver_lowest(query):
-    if not query or len(query) < 2: return None
-    clean_query = query.replace("트레이더스", "").replace("(각)", "").replace("세트", "").strip()[:60]
+    if not query or len(query) < 3:
+        return None
+    
+    clean_query = query.replace("트레이더스", "").replace("(각)", "").replace("세트", "").strip()
+    clean_query = clean_query[:60]
+    
+    url = "https://openapi.naver.com/v1/search/shop.json"
+    params = {"query": clean_query, "display": 1, "sort": "asc"}
     headers = {
         "X-Naver-Client-Id": os.environ["NAVER_CLIENT_ID"],
         "X-Naver-Client-Secret": os.environ["NAVER_CLIENT_SECRET"]
     }
+    
     try:
-        res = requests.get("https://openapi.naver.com/v1/search/shop.json", 
-                           params={"query": clean_query, "display": 1, "sort": "asc"}, 
-                           headers=headers, timeout=10)
+        res = requests.get(url, params=params, headers=headers, timeout=10)
         items = res.json().get("items", [])
-        return int(items[0]["lprice"]) if items else None
-    except: return None
-
-def get_flyer_images():
-    """트레이더스 서버에서 실제 전단 이미지 리스트를 가져오는 핵심 로직"""
-    print("🔎 전단지 이미지 추출 중...")
-    
-    # 1단계: 메인 페이지 접속해서 현재 전단지 ID(flyerId) 혹은 이미지 경로 찾기
-    main_url = "https://eapp.emart.com/tradersclub/flyerImgView.do"
-    headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"}
-    
-    try:
-        res = requests.get(main_url, headers=headers, timeout=15)
-        html = res.text
-        
-        # 2단계: HTML 소스 내부에 자바스크립트 배열 형태로 숨겨진 이미지 URL들 추출
-        # 보통 ['/upload/flyer/123_1.jpg', '/upload/flyer/123_2.jpg' ...] 형태를 찾습니다.
-        img_paths = re.findall(r'[\'"](/upload/flyer/[^\'"]+?\.jpg)[\'"]', html)
-        
-        if not img_paths:
-            # 다른 경로 패턴 시도 (trd 접두어 등)
-            img_paths = re.findall(r'[\'"](/upload/[^\'"]+?\.jpg)[\'"]', html)
-
-        image_objects = []
-        base_url = "https://eapp.emart.com"
-        
-        # 중복 제거 후 5~6개 페이지만 처리
-        final_urls = list(dict.fromkeys([base_url + p for p in img_paths]))
-        
-        for url in final_urls[:6]:
-            try:
-                img_res = requests.get(url, timeout=10)
-                if img_res.status_code == 200:
-                    image_objects.append(Image.open(BytesIO(img_res.content)))
-                    print(f"✅ 로드 성공: {url}")
-            except: continue
-            
-        return image_objects
+        if items:
+            price = int(items[0]["lprice"])
+            print(f"검색어: {clean_query} → 네이버 최저가: {price:,}원")
+            return price
     except Exception as e:
-        print(f"❌ 오류: {e}")
-        return []
+        print(f"네이버 검색 실패 ({clean_query}): {e}")
+    
+    return None
 
-def main():
-    print("🚀 트레이더스 전단 분석 시작...")
-    send_telegram(f"📸 {datetime.now().strftime('%m/%d')} 트레이더스 5면 분석을 시작합니다.")
+def get_danawa_link(product_name):
+    clean_name = product_name.replace(" ", "+").replace("(", "").replace(")", "")
+    return f"https://prod.danawa.com/list/?go=productSearch&searchKeyword={clean_name}"
 
-    images = get_flyer_images()
-    if not images:
-        print("❌ 이미지를 찾을 수 없습니다.")
-        send_telegram("⚠️ 이미지를 찾지 못했습니다. 사이트 구조를 확인해주세요.")
-        return
+# ================== 메인 실행 ==================
+print("🚀 트레이더스 전단 분석 시작...")
 
-    print(f"✅ 총 {len(images)}장의 전단지 확보. Gemini 분석 중...")
+send_telegram("📸 트레이더스 오늘 전단 분석 시작합니다!\n전체 페이지를 분석해서 10% 이상 저렴한 작은 상품을 찾아드려요.")
 
-    # 3단계: Gemini 1.5 Flash 멀티모달 분석
-    prompt = """트레이더스 전단지 이미지들입니다. 모든 이미지의 할인 상품 정보를 추출하세요. 
-    반드시 [ {"name": "이름", "original_price": 0, "discount": 0, "sale_price": 0} ] 형식의 JSON만 출력하세요."""
+flyer_url = "https://eapp.emart.com/tradersclub/flyerImgView.do"
+page_response = requests.get(flyer_url, headers={"User-Agent": "Mozilla/5.0"})
 
-    try:
-        # 최신 SDK 방식 (이미지와 텍스트 동시 전달)
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=[*images, prompt]
-        )
-        
-        raw_text = response.text.strip()
-        # JSON 정제 (마크다운 제거)
-        json_str = re.sub(r'```json|```', '', raw_text).strip()
-        products = json.loads(json_str)
-    except Exception as e:
-        print(f"분석 에러: {e}")
-        return
+# 전체 페이지 분석을 강조한 프롬프트 (페이지 수 한정 제거)
+prompt = """
+당신은 이마트 트레이더스 전단 전문 분석가입니다.
 
-    # 4단계: 네이버 비교 및 결과 전송
-    message = f"🔥 <b>트레이더스 금주 핫딜 (10% 이상 저렴)</b>\n\n"
-    count = 0
+이 페이지는 트레이더스 이번 주 전단 페이지입니다. 
+사용자가 오른쪽/왼쪽으로 넘겨가며 보는 **여러 페이지**로 구성된 전단입니다.
+
+**전체 페이지의 내용을 모두 분석**해서 할인 상품들, 특히 작은 상품(생활용품, 세제, 가전, 의류, 침구, 식품 등)을 최대한 많이 정확하게 추출해주세요.
+
+각 상품마다 아래 JSON 형식으로만 출력해. 다른 설명은 절대 넣지 마세요:
+
+[
+  {
+    "name": "상품의 정확하고 자연스러운 전체 이름",
+    "original_price": 정상가_숫자,
+    "discount": 할인금액_숫자,
+    "sale_price": 실제판매가_숫자
+  }
+]
+
+실제 판매가는 original_price - discount로 계산해서 넣어주세요.
+가능한 한 많은 상품을 전체 페이지에서 추출해주세요.
+"""
+
+response = model.generate_content([page_response.text, prompt])
+
+raw_text = response.text.strip()
+
+try:
+    if "```json" in raw_text:
+        raw_text = raw_text.split("```json")[1].split("```")[0].strip()
+    elif "```" in raw_text:
+        raw_text = raw_text.split("```")[1].strip()
+    
+    products = json.loads(raw_text)
+    print(f"✅ 총 {len(products)}개 상품 추출 성공!")
+except Exception as e:
+    print("JSON 파싱 실패:", e)
+    products = []
+
+# ================== 결과 정리 ==================
+if not products:
+    send_telegram("상품 추출 실패")
+else:
+    message = f"🔥 <b>트레이더스 {datetime.now().strftime('%m월 %d일')} 작은 상품 승리 목록 (10% 이상 저렴)</b>\n\n"
+    
+    good_count = 0
+    seen = set()
+
     for p in products:
-        name = p.get("name", "")
-        sale_price = p.get("sale_price", 0)
-        if not name or sale_price < 1000: continue
-        
+        name = str(p.get("name", "")).strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+
+        original = int(p.get("original_price") or 0)
+        discount = int(p.get("discount") or 0)
+        sale_price = int(p.get("sale_price") or (original - discount))
+
+        if sale_price <= 1000:
+            continue
+
         naver_price = get_naver_lowest(name)
+        danawa_link = get_danawa_link(name)
+
         if naver_price and sale_price < naver_price * 0.90:
             diff = naver_price - sale_price
-            message += f"🏆 <b>{name}</b>\n💰 <b>{sale_price:,}원</b> (네이버 {naver_price:,}원 대비 ▼{diff:,}원)\n\n"
-            count += 1
-            if count >= 15: break # 텔레그램 길이 제한 방지
+            percent = round((diff / naver_price) * 100)
 
-    if count == 0: message += "이번 주는 대박 상품이 없네요."
+            message += f"🏆 <b>{name}</b>\n"
+            message += f"트레이더스: <b>{sale_price:,}원</b> (원가 {original:,}원 - {discount:,}원 할인)\n"
+            message += f"네이버 현재 최저: {naver_price:,}원 (▼{diff:,}원, {percent}% 저렴)\n"
+            message += f"📊 다나와 가격 추이 보기 → {danawa_link}\n\n"
+            good_count += 1
+
+    if good_count == 0:
+        message += "이번 주는 10% 이상 저렴한 작은 상품이 없네요.\n전단 직접 확인 추천드려요!"
+    else:
+        message += f"🎉 총 {good_count}개 상품에서 트레이더스가 10% 이상 승리했습니다!"
+
     send_telegram(message)
-    print(f"✅ 전송 완료 ({count}개 상품)")
-
-if __name__ == "__main__":
-    main()
+    print(f"✅ 분석 완료! {good_count}개 승리 상품을 보냈습니다.")
