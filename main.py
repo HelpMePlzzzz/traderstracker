@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 import google.generativeai as genai
 import re
+import statistics   # 평균 계산용
 
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 model = genai.GenerativeModel("gemini-2.5-flash")
@@ -14,61 +15,71 @@ def send_telegram(text):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     requests.post(url, data={"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
 
-def get_naver_lowest(query):
+def get_naver_lowest(query, original_price=0):
     if not query or len(query) < 3:
         return None
 
-    # 1. 모델명, 규격 코드 제거 (알파벳+숫자 조합)
+    # 모델명 제거 + 정리
     clean_query = re.sub(r'[A-Za-z0-9]{6,}', '', query)
-    
-    # 2. 기본 정리
     clean_query = clean_query.replace("트레이더스", "").replace("(각)", "").replace("세트", "").strip()
-    clean_query = re.sub(r'\s+', ' ', clean_query).strip()
-    
-    # 3. 너무 짧아지면 원본에서 주요 단어 4개 정도만 사용
-    if len(clean_query) < 5:
-        words = query.split()[:5]
-        clean_query = " ".join(words)
+    clean_query = re.sub(r'\s+', ' ', clean_query).strip()[:55]
 
-    # 4. "최저가" 키워드 추가
     search_query = clean_query + " 최저가"
 
     url = "https://openapi.naver.com/v1/search/shop.json"
-    params = {"query": search_query, "display": 1, "sort": "asc"}
+    params = {"query": search_query, "display": 3, "sort": "sim"}   # sim = 랭킹순 (관련도 순)
     headers = {
         "X-Naver-Client-Id": os.environ["NAVER_CLIENT_ID"],
         "X-Naver-Client-Secret": os.environ["NAVER_CLIENT_SECRET"]
     }
-    
+
     try:
         res = requests.get(url, params=params, headers=headers, timeout=10)
         items = res.json().get("items", [])
-        if items:
-            price = int(items[0]["lprice"])
-            
-            # 가격이 비정상적으로 낮으면 (5만원 이하) 재시도
-            if price < 50000:
-                # 더 짧고 핵심적인 검색어로 재시도
-                short_query = " ".join(clean_query.split()[:4]) + " 최저가"
-                res2 = requests.get(url, params={"query": short_query, "display": 1, "sort": "asc"}, headers=headers, timeout=10)
-                items2 = res2.json().get("items", [])
-                if items2:
-                    price2 = int(items2[0]["lprice"])
-                    if 10000 < price2 < 2000000:   # 합리적인 가격 범위
-                        price = price2
-                        print(f"재검색 성공: {short_query} → {price:,}원")
-            
-            print(f"최종 검색어: {search_query} → 네이버 최저가: {price:,}원")
-            return price
+
+        if not items:
+            return None
+
+        prices = []
+        for item in items[:3]:   # 상위 3개만 사용
+            try:
+                price = int(item["lprice"])
+                if price > 1000:   # 너무 낮은 가격은 제외
+                    prices.append(price)
+            except:
+                continue
+
+        if not prices:
+            return None
+
+        # 상위 3개 가격의 평균 계산
+        avg_price = int(statistics.mean(prices))
+        
+        print(f"검색어: {search_query} → 상위 3개 평균: {avg_price:,}원 (개별: {[f'{p:,}' for p in prices]})")
+
+        # 원가 대비 이상치 체크
+        if original_price > 0 and avg_price < original_price * 0.25:
+            print(f"⚠️ 원가 대비 가격 이상치 감지 → 재검색 시도")
+            # 재검색 (더 짧은 검색어)
+            short_query = " ".join(clean_query.split()[:4]) + " 최저가"
+            res2 = requests.get(url, params={"query": short_query, "display": 3, "sort": "sim"}, headers=headers, timeout=10)
+            items2 = res2.json().get("items", [])
+            if items2:
+                prices2 = [int(item["lprice"]) for item in items2[:3] if int(item["lprice"]) > 1000]
+                if prices2:
+                    avg_price = int(statistics.mean(prices2))
+                    print(f"재검색 평균: {avg_price:,}원")
+
+        return avg_price
+
     except Exception as e:
         print(f"네이버 검색 실패 ({search_query}): {e}")
-    
-    return None
+        return None
 
 # ================== 메인 실행 ==================
 print("🚀 트레이더스 전단 분석 시작...")
 
-send_telegram("📸 트레이더스 오늘 전단 분석 시작합니다!\n전체 페이지를 분석해서 10% 이상 저렴한 작은 상품을 찾아드려요.")
+send_telegram("📸 트레이더스 오늘 전단 분석 시작합니다!\n네이버 상위 3개 평균 가격으로 계산합니다.")
 
 flyer_url = "https://eapp.emart.com/tradersclub/flyerImgView.do"
 page_response = requests.get(flyer_url, headers={"User-Agent": "Mozilla/5.0"})
@@ -105,7 +116,6 @@ try:
     print(f"✅ 총 {len(products)}개 상품 추출 성공!")
 except Exception as e:
     print("JSON 파싱 실패:", e)
-    print("원본 응답 미리보기:", raw_text[:400])
     products = []
 
 # ================== 결과 정리 ==================
@@ -130,7 +140,7 @@ else:
         if sale_price <= 1000:
             continue
 
-        naver_price = get_naver_lowest(name)
+        naver_price = get_naver_lowest(name, original)
 
         if naver_price and sale_price < naver_price * 0.90:
             diff = naver_price - sale_price
@@ -138,7 +148,7 @@ else:
 
             message += f"🏆 <b>{name}</b>\n"
             message += f"트레이더스: <b>{sale_price:,}원</b> (원가 {original:,}원 - {discount:,}원 할인)\n"
-            message += f"네이버 현재 최저: {naver_price:,}원 (▼{diff:,}원, {percent}% 저렴)\n\n"
+            message += f"네이버 상위 3개 평균 최저: {naver_price:,}원 (▼{diff:,}원, {percent}% 저렴)\n\n"
             good_count += 1
 
     if good_count == 0:
