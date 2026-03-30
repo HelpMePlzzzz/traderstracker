@@ -9,7 +9,7 @@ import google.generativeai as genai
 
 # 1. 환경 설정 및 API 세팅
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-model = genai.GenerativeModel("gemini-1.5-flash") # 최신 모델명 확인
+model = genai.GenerativeModel("gemini-2.5-flash") # 최신 모델명 확인
 
 # 2. 유틸리티 함수들 (항상 상단에 위치해야 합니다)
 def send_telegram(text):
