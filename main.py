@@ -14,51 +14,27 @@ def send_telegram(text):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     
     MAX_LENGTH = 3800
-    
     if len(text) <= MAX_LENGTH:
         requests.post(url, data={"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
     else:
-        # 상품 단위로 분할 (하나의 상품은 절대 중간에 잘리지 않음)
         parts = []
         current = ""
-        
-        # 메시지를 줄 단위로 분리
         lines = text.split('\n')
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            
-            # 새로운 상품 시작 (🏆 로 시작하는 줄)
-            if line.startswith("🏆"):
-                # 현재 누적된 메시지가 MAX_LENGTH를 넘으면 전송
-                if len(current) > MAX_LENGTH and current:
-                    parts.append(current.strip())
-                    current = ""
-                
-            # 현재 줄을 추가했을 때 길이 초과하면 전송
+        for line in lines:
             if len(current) + len(line) + 1 > MAX_LENGTH and current:
                 parts.append(current.strip())
                 current = line + '\n'
             else:
                 current += line + '\n'
-            
-            i += 1
-        
-        # 마지막 부분 추가
         if current.strip():
             parts.append(current.strip())
         
-        # 분할된 메시지 순차 전송
-        for idx, part in enumerate(parts, 1):
-            prefix = f"📋 {idx}/{len(parts)}\n\n" if len(parts) > 1 else ""
-            requests.post(url, data={
-                "chat_id": chat_id, 
-                "text": prefix + part, 
-                "parse_mode": "HTML"
-            })
-            if idx < len(parts):
+        for i, part in enumerate(parts, 1):
+            prefix = f"📋 {i}/{len(parts)}\n\n" if len(parts) > 1 else ""
+            requests.post(url, data={"chat_id": chat_id, "text": prefix + part, "parse_mode": "HTML"})
+            if i < len(parts):
                 import time
-                time.sleep(0.6)  # 너무 빠르게 보내지 않도록 약간 대기
+                time.sleep(0.6)
 
 def get_naver_lowest(query, original_price=0):
     if not query or len(query) < 3:
@@ -109,7 +85,7 @@ def get_naver_lowest(query, original_price=0):
 # ================== 메인 실행 ==================
 print("🚀 트레이더스 전단 분석 시작...")
 
-send_telegram("📸 트레이더스 오늘 전단 분석 시작합니다!\n메시지가 길면 상품 단위로 나누어 보내드려요.")
+send_telegram("📸 트레이더스 오늘 전단 분석 시작합니다!")
 
 flyer_url = "https://eapp.emart.com/tradersclub/flyerImgView.do"
 page_response = requests.get(flyer_url, headers={"User-Agent": "Mozilla/5.0"})
@@ -118,7 +94,8 @@ prompt = """
 이 페이지는 이마트 트레이더스 이번 주 전단 페이지입니다.
 전체 내용을 분석해서 할인 상품들을 추출해주세요.
 
-각 상품마다 아래 JSON 형식으로만 출력해. 다른 설명은 절대 넣지 마세요:
+각 상품마다 아래 JSON 형식으로만 출력해. 다른 설명은 절대 넣지 마세요.
+할인율(%)이 아닌 숫자 할인 금액을 discount에 넣어주세요.
 
 [
   {
@@ -136,16 +113,30 @@ response = model.generate_content([page_response.text, prompt])
 
 raw_text = response.text.strip()
 
+# JSON 파싱 안전 처리
 try:
     if "```json" in raw_text:
         raw_text = raw_text.split("```json")[1].split("```")[0].strip()
     elif "```" in raw_text:
         raw_text = raw_text.split("```")[1].strip()
     
+    raw_text = raw_text.strip()
+
+    if not raw_text.startswith("["):
+        start = raw_text.find("[")
+        if start != -1:
+            raw_text = raw_text[start:]
+    if not raw_text.endswith("]"):
+        end = raw_text.rfind("]")
+        if end != -1:
+            raw_text = raw_text[:end+1]
+
     products = json.loads(raw_text)
     print(f"✅ 총 {len(products)}개 상품 추출 성공!")
 except Exception as e:
     print("JSON 파싱 실패:", e)
+    print("Gemini 원본 응답 미리보기:", raw_text[:500])
+    send_telegram("❌ 상품을 제대로 읽지 못했습니다.\n다음에 다시 시도할게요.")
     products = []
 
 # ================== 결과 정리 ==================
@@ -164,9 +155,17 @@ else:
             continue
         seen.add(name)
 
-        original = int(p.get("original_price") or 0)
-        discount = int(p.get("discount") or 0)
-        sale_price = int(p.get("sale_price") or (original - discount))
+        # 안전한 숫자 변환
+        original = 0
+        discount = 0
+        sale_price = 0
+
+        try:
+            original = int(p.get("original_price") or 0)
+            discount = int(p.get("discount") or 0)
+            sale_price = int(p.get("sale_price") or (original - discount))
+        except:
+            continue
 
         if sale_price <= 1000:
             continue
@@ -181,7 +180,6 @@ else:
             item_text += f"트레이더스: <b>{sale_price:,}원</b> (원가 {original:,}원 - {discount:,}원 할인)\n"
             item_text += f"네이버 현재 최저: {naver_price:,}원 (▼{diff:,}원, {percent}% 저렴)\n\n"
 
-            # 하나의 상품이 3800자를 넘지 않도록 체크
             if len(temp_message) + len(item_text) > 3800 and temp_message:
                 send_telegram(message + temp_message)
                 temp_message = item_text
@@ -189,7 +187,6 @@ else:
                 temp_message += item_text
             good_count += 1
 
-    # 마지막 부분 전송
     if temp_message:
         send_telegram(message + temp_message)
 
