@@ -3,7 +3,6 @@ import json
 import os
 from datetime import datetime
 import google.generativeai as genai
-import re   # 모델명 제거용
 
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 model = genai.GenerativeModel("gemini-2.5-flash")
@@ -18,17 +17,11 @@ def get_naver_lowest(query):
     if not query or len(query) < 3:
         return None
     
-    # 1. 모델명(알파벳+숫자 조합 8자 이상) 제거
-    clean_query = re.sub(r'[A-Za-z0-9]{8,}', '', query)
-    # 2. 불필요한 단어 제거
-    clean_query = clean_query.replace("트레이더스", "").replace("(각)", "").replace("세트", "").strip()
-    clean_query = clean_query[:55]   # 검색어 길이 제한
-    
-    # 3. "최저가" 키워드 추가하여 정확한 상품 검색 유도
-    search_query = clean_query + " 최저가"
+    clean_query = query.replace("트레이더스", "").replace("(각)", "").replace("세트", "").strip()
+    clean_query = clean_query[:60]
     
     url = "https://openapi.naver.com/v1/search/shop.json"
-    params = {"query": search_query, "display": 1, "sort": "asc"}
+    params = {"query": clean_query, "display": 1, "sort": "asc"}
     headers = {
         "X-Naver-Client-Id": os.environ["NAVER_CLIENT_ID"],
         "X-Naver-Client-Secret": os.environ["NAVER_CLIENT_SECRET"]
@@ -39,23 +32,10 @@ def get_naver_lowest(query):
         items = res.json().get("items", [])
         if items:
             price = int(items[0]["lprice"])
-            print(f"검색어: {search_query} → 네이버 최저가: {price:,}원")
-            
-            # 가격이 비정상적으로 낮으면 (예: 1730원) 다시 짧은 검색어로 재시도
-            if price < 50000:
-                short_query = clean_query.split()[:3]  # 앞 3단어만 사용
-                short_search = " ".join(short_query) + " 최저가"
-                res2 = requests.get(url, params={"query": short_search, "display": 1, "sort": "asc"}, headers=headers, timeout=10)
-                items2 = res2.json().get("items", [])
-                if items2:
-                    price2 = int(items2[0]["lprice"])
-                    if price2 > price and price2 < 1000000:   # 너무 비싼 것도 제외
-                        price = price2
-                        print(f"재검색 성공 → {price:,}원")
-            
+            print(f"검색어: {clean_query} → 네이버 최저가: {price:,}원")
             return price
     except Exception as e:
-        print(f"네이버 검색 실패 ({search_query}): {e}")
+        print(f"네이버 검색 실패 ({clean_query}): {e}")
     
     return None
 
@@ -67,13 +47,13 @@ send_telegram("📸 트레이더스 오늘 전단 분석 시작합니다!\n전�
 flyer_url = "https://eapp.emart.com/tradersclub/flyerImgView.do"
 page_response = requests.get(flyer_url, headers={"User-Agent": "Mozilla/5.0"})
 
+# JSON 강제 출력 프롬프트 (최대한 강하게)
 prompt = """
-이 페이지는 이마트 트레이더스 이번 주 전단 페이지입니다.
-사용자가 오른쪽/왼쪽으로 넘겨가며 보는 여러 페이지 전단입니다.
+너는 JSON만 출력하는 기계입니다. 어떤 설명도, 인사도, 코드 블록도 넣지 말고 **오직 JSON 배열**만 출력하세요.
 
-전체 페이지 내용을 모두 분석해서 할인 상품들, 특히 작은 상품(생활용품, 세제, 가전, 의류, 침구, 식품 등)을 최대한 많이 정확하게 추출해주세요.
+이 페이지는 이마트 트레이더스 전단 페이지입니다. 전체 내용을 분석해서 할인 상품들을 추출하세요.
 
-각 상품마다 아래 JSON 형식으로만 출력해. 다른 설명은 절대 넣지 마세요:
+반드시 아래 형식의 JSON 배열로만 답변하세요:
 
 [
   {
@@ -84,28 +64,42 @@ prompt = """
   }
 ]
 
-실제 판매가는 original_price - discount로 계산해서 넣어주세요.
+JSON이 제대로 시작하고 끝나야 합니다. 다른 어떤 텍스트도 추가하지 마세요.
 """
 
 response = model.generate_content([page_response.text, prompt])
 
 raw_text = response.text.strip()
 
+# JSON 파싱을 최대한 안전하게 처리
 try:
-    if "```json" in raw_text:
-        raw_text = raw_text.split("```json")[1].split("```")[0].strip()
-    elif "```" in raw_text:
-        raw_text = raw_text.split("```")[1].strip()
+    # 불필요한 텍스트 제거
+    if raw_text.startswith("```json"):
+        raw_text = raw_text[7:]
+    if raw_text.startswith("```"):
+        raw_text = raw_text[3:]
+    if raw_text.endswith("```"):
+        raw_text = raw_text[:-3]
     
+    raw_text = raw_text.strip()
+
+    # JSON 시작과 끝 강제 보정
+    if not raw_text.startswith("["):
+        raw_text = "[" + raw_text[raw_text.find("["):]
+    if not raw_text.endswith("]"):
+        raw_text = raw_text[:raw_text.rfind("]") + 1]
+
     products = json.loads(raw_text)
     print(f"✅ 총 {len(products)}개 상품 추출 성공!")
 except Exception as e:
     print("JSON 파싱 실패:", e)
+    print("Gemini 원본 응답 (처음 300자):", raw_text[:300])
+    send_telegram("❌ 상품을 제대로 읽지 못했습니다.\n다음에 다시 시도할게요.")
     products = []
 
 # ================== 결과 정리 ==================
-if not products:
-    send_telegram("상품 추출 실패")
+if not products or len(products) == 0:
+    send_telegram("이번 전단에서 상품을 충분히 읽지 못했어요 😢\n직접 사이트를 확인해주세요.")
 else:
     message = f"🔥 <b>트레이더스 {datetime.now().strftime('%m월 %d일')} 작은 상품 승리 목록 (10% 이상 저렴)</b>\n\n"
     
