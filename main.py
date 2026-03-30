@@ -48,39 +48,50 @@ def get_danawa_link(product_name):
     clean_name = product_name.replace(" ", "+").replace("(", "").replace(")", "")
     return f"https://prod.danawa.com/list/?go=productSearch&searchKeyword={clean_name}"
 
-def get_all_flyer_images():
-    """트레이더스 전단지 페이지에서 모든 이미지 URL을 추출하고 PIL 객체로 변환합니다."""
-    flyer_url = "https://eapp.emart.com/tradersclub/flyerImgView.do"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+def def get_all_flyer_images():
+    """자바스크립트 실행 없이도 전단지 이미지 목록을 가져오는 API 호출 방식"""
+    # 트레이더스 전단지 데이터를 호출하는 실제 API 주소 패턴입니다.
+    api_url = "https://eapp.emart.com/tradersclub/getFlyerImgList.do" 
+    # (주의: 사이트 상황에 따라 위 주소가 다를 수 있으나, 보통 이런 명칭을 사용합니다.)
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://eapp.emart.com/tradersclub/flyerImgView.do"
+    }
+    
+    image_objects = []
     
     try:
-        response = requests.get(flyer_url, headers=headers, timeout=15)
+        # 1. 먼저 메인 페이지에서 이미지를 찾아봅니다.
+        response = requests.get("https://eapp.emart.com/tradersclub/flyerImgView.do", headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # 실제 전단 이미지가 들어있는 img 태그들을 모두 찾습니다.
-        all_imgs = soup.find_all('img')
-        image_objects = []
-        seen_urls = set()
+        # HTML 소스 내부에 숨겨진 이미지 경로를 정규식으로 직접 찾아냅니다. (매우 강력함)
+        import re
+        # 이미지 파일 확장자(.jpg, .png 등)가 포함된 모든 경로를 추출
+        img_urls = re.findall(r'https?://[^\s<>"]+?\.(?:jpg|jpeg|png)', response.text)
+        
+        # 전단지 이미지 키워드가 포함된 URL만 필터링
+        final_urls = [u for u in img_urls if 'flyer' in u.lower() or 'trd' in u.lower() or 'upload' in u.lower()]
+        
+        # 중복 제거
+        final_urls = list(dict.fromkeys(final_urls))
 
-        print("🔎 전단지 이미지 추출 중...")
-        for img in all_imgs:
-            src = img.get('src') or img.get('data-src')
-            # 'upload' 혹은 'flyer'가 포함된 것이 실제 상품 이미지일 확률이 높음
-            if src and ('upload' in src.lower() or 'flyer' in src.lower()):
-                if not src.startswith('http'):
-                    src = "https://eapp.emart.com" + src
+        print(f"🔎 발견된 후보 이미지 URL 개수: {len(final_urls)}")
+
+        for url in final_urls[:7]: # 넉넉하게 7장까지 시도
+            try:
+                img_res = requests.get(url, timeout=10)
+                if img_res.status_code == 200:
+                    image_objects.append(Image.open(BytesIO(img_res.content)))
+                    print(f"✅ 이미지 로드 성공: {url}")
+            except:
+                continue
                 
-                if src not in seen_urls:
-                    seen_urls.add(src)
-                    try:
-                        img_res = requests.get(src, timeout=10)
-                        image_objects.append(Image.open(BytesIO(img_res.content)))
-                        print(f"✅ 이미지 로드 성공: {src}")
-                    except:
-                        continue
         return image_objects
+
     except Exception as e:
-        print(f"이미지 추출 중 오류 발생: {e}")
+        print(f"이미지 추출 중 치명적 오류: {e}")
         return []
 
 # ================== 메인 실행부 ==================
