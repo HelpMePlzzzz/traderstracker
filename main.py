@@ -2,7 +2,7 @@ import requests
 import json
 import os
 from datetime import datetime
-import google.generativeai as genai   # ← 안정적인 구버전 사용
+import google.generativeai as genai
 
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 model = genai.GenerativeModel("gemini-2.5-flash")
@@ -17,7 +17,6 @@ def get_naver_lowest(query):
     if not query or len(query) < 3:
         return None
     
-    # 상품명 정리 - 최대한 일반적으로 (특정 상품 하드코딩 완전 제거)
     clean_query = query.replace("트레이더스", "").replace("(각)", "").replace("세트", "").strip()
     clean_query = clean_query[:60]
     
@@ -45,18 +44,21 @@ def get_danawa_link(product_name):
     return f"https://prod.danawa.com/list/?go=productSearch&searchKeyword={clean_name}"
 
 # ================== 메인 실행 ==================
-print("🚀 트레이더스 전단 분석 시작...")
+print("🚀 트레이더스 전단 분석 시작 (5면 전체 분석)...")
 
-send_telegram("📸 트레이더스 오늘 전단 분석 시작합니다!\n10% 이상 저렴한 작은 상품 + 다나와 링크 함께 보내드려요.")
+send_telegram("📸 트레이더스 오늘 전단 분석 시작합니다!\n5면 전체를 분석해서 10% 이상 저렴한 작은 상품을 찾아드려요.")
 
 flyer_url = "https://eapp.emart.com/tradersclub/flyerImgView.do"
 page_response = requests.get(flyer_url, headers={"User-Agent": "Mozilla/5.0"})
 
+# 5면 전단을 고려한 강력한 프롬프트
 prompt = """
-이 페이지는 이마트 트레이더스 이번 주 전단 페이지입니다. 
-이 전단은 여러 페이지로 구성되어 있습니다.
+당신은 이마트 트레이더스 전단 전문 분석가입니다.
 
-전체 내용을 분석해서 **할인 상품**, 특히 생활용품, 세제, 가전, 의류, 침구 등 작은 상품들을 최대한 많이 정확하게 추출해주세요.
+이 페이지는 **총 5면**으로 구성된 트레이더스 이번 주 전단입니다. 
+사용자가 오른쪽/왼쪽으로 넘겨가며 보는 멀티페이지 전단입니다.
+
+전체 5면의 내용을 모두 분석해서 **할인 상품**, 특히 **작은 상품들**(생활용품, 세제, 가전, 의류, 침구, 식품 등)을 최대한 많이 정확하게 추출해주세요.
 
 각 상품마다 아래 JSON 형식으로만 출력해. 다른 설명은 절대 넣지 마세요:
 
@@ -70,6 +72,7 @@ prompt = """
 ]
 
 실제 판매가는 original_price - discount로 계산해서 넣어주세요.
+가능한 한 많은 상품을 5면 모두에서 추출해주세요.
 """
 
 response = model.generate_content([page_response.text, prompt])
