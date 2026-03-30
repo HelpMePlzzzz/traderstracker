@@ -1,4 +1,7 @@
 requests
-google-genai
+google-generativeai
 python-dotenv
-danawa-py
+selenium
+beautifulsoup4
+webdriver-manager
+Pillow
