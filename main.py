@@ -90,12 +90,13 @@ send_telegram("📸 트레이더스 오늘 전단 분석 시작합니다!")
 flyer_url = "https://eapp.emart.com/tradersclub/flyerImgView.do"
 page_response = requests.get(flyer_url, headers={"User-Agent": "Mozilla/5.0"})
 
+# JSON 강제 + 불필요한 스크립트 무시 프롬프트
 prompt = """
-이 페이지는 이마트 트레이더스 이번 주 전단 페이지입니다.
-전체 내용을 분석해서 할인 상품들을 추출해주세요.
+너는 JSON만 출력하는 기계이다. 절대 설명, 코드, 주석, 마크다운을 넣지 말고 오직 JSON 배열만 출력해라.
 
-각 상품마다 아래 JSON 형식으로만 출력해. 다른 설명은 절대 넣지 마세요.
-할인율(%)이 아닌 숫자 할인 금액을 discount에 넣어주세요.
+이 페이지는 이마트 트레이더스 전단 페이지이다. JavaScript 코드나 불필요한 스크립트는 무시하고, 실제 상품 정보(이름, 가격, 할인)만 분석해서 추출해라.
+
+아래 형식으로만 정확히 출력:
 
 [
   {
@@ -106,42 +107,47 @@ prompt = """
   }
 ]
 
-실제 판매가는 original_price - discount로 계산해서 넣어주세요.
+실제 판매가는 original_price - discount로 계산해서 넣어라.
 """
 
 response = model.generate_content([page_response.text, prompt])
 
 raw_text = response.text.strip()
 
-# JSON 파싱 안전 처리
+# JSON 파싱 안전 처리 (강화)
 try:
-    if "```json" in raw_text:
-        raw_text = raw_text.split("```json")[1].split("```")[0].strip()
-    elif "```" in raw_text:
-        raw_text = raw_text.split("```")[1].strip()
+    # 불필요한 부분 최대한 제거
+    raw_text = raw_text.strip()
+    if raw_text.startswith("```json"):
+        raw_text = raw_text[7:]
+    if raw_text.startswith("```"):
+        raw_text = raw_text[3:]
+    if raw_text.endswith("```"):
+        raw_text = raw_text[:-3]
     
     raw_text = raw_text.strip()
 
-    if not raw_text.startswith("["):
-        start = raw_text.find("[")
-        if start != -1:
-            raw_text = raw_text[start:]
-    if not raw_text.endswith("]"):
-        end = raw_text.rfind("]")
-        if end != -1:
-            raw_text = raw_text[:end+1]
+    # JSON 시작 위치 찾기
+    start = raw_text.find("[")
+    if start != -1:
+        raw_text = raw_text[start:]
+    
+    # JSON 끝 위치 찾기
+    end = raw_text.rfind("]")
+    if end != -1:
+        raw_text = raw_text[:end+1]
 
     products = json.loads(raw_text)
     print(f"✅ 총 {len(products)}개 상품 추출 성공!")
 except Exception as e:
     print("JSON 파싱 실패:", e)
-    print("Gemini 원본 응답 미리보기:", raw_text[:500])
+    print("Gemini 원본 응답 미리보기 (500자):", raw_text[:500])
     send_telegram("❌ 상품을 제대로 읽지 못했습니다.\n다음에 다시 시도할게요.")
     products = []
 
 # ================== 결과 정리 ==================
-if not products:
-    send_telegram("상품 추출 실패")
+if not products or len(products) == 0:
+    send_telegram("이번 전단에서 상품을 충분히 읽지 못했어요 😢\n직접 사이트를 확인해주세요.")
 else:
     message = f"🔥 <b>트레이더스 {datetime.now().strftime('%m월 %d일')} 작은 상품 승리 목록 (10% 이상 저렴)</b>\n\n"
     
@@ -155,7 +161,6 @@ else:
             continue
         seen.add(name)
 
-        # 안전한 숫자 변환
         original = 0
         discount = 0
         sale_price = 0
